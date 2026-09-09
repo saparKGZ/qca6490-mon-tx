@@ -81,7 +81,8 @@ jobs:
           # Оставляем только qcacld и его зависимости из depends= стокового модуля:
           #   cnss2, mi_cnss_statistic, cfg80211, cnss_prealloc, cnss_nl, cnss_utils
           KEEP="CONFIG_QCA_CLD_WLAN CONFIG_CNSS2 CONFIG_CNSS_UTILS CONFIG_CNSS_GENL \
-                CONFIG_WCNSS_MEM_PRE_ALLOC CONFIG_MI_CNSS_STATISTIC CONFIG_CFG80211"
+                CONFIG_WCNSS_MEM_PRE_ALLOC CONFIG_MI_CNSS_STATISTIC CONFIG_CFG80211 \
+                CONFIG_PCI_MSM"
           awk -v keep="$KEEP" '
             BEGIN { n = split(keep, a, /[ \t]+/); for (i = 1; i <= n; i++) k[a[i]] = 1 }
             /^CONFIG_[A-Z0-9_]+=m$/ {
@@ -97,7 +98,7 @@ jobs:
           fail=0
           for K in CONFIG_LTO_CLANG_FULL CONFIG_CFI_CLANG CONFIG_CFI_CLANG_SHADOW \
                    CONFIG_MODVERSIONS CONFIG_QCA_CLD_WLAN CONFIG_KASAN_HW_TAGS \
-                   CONFIG_CNSS2 CONFIG_CNSS_UTILS CONFIG_CFG80211; do
+                   CONFIG_CNSS2 CONFIG_CNSS_UTILS CONFIG_CFG80211 CONFIG_PCI_MSM; do
             if grep -qE "^$K=" .config; then
               echo "  ok   $(grep -E "^$K=" .config)"
             else
