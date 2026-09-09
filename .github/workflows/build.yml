@@ -48,22 +48,27 @@ jobs:
 
       - name: Клонировать ядро
         run: |
+          # Короткий путь принципиален: при внешней сборке kbuild подставляет
+          # АБСОЛЮТНЫЕ пути ко всем ~1000 объектам, и команда линковки уходит
+          # в /bin/sh -c одним аргументом. Лимит на один аргумент — 128 КБ,
+          # и с путём /home/runner/work/<repo>/<repo>/kernel мы его превышали.
+          sudo mkdir -p /k && sudo chown "$USER" /k
           git clone --depth 1 --branch melt-rebase \
-            https://github.com/Pzqqt/android_kernel_xiaomi_marble.git kernel
-          cd kernel
+            https://github.com/Pzqqt/android_kernel_xiaomi_marble.git /k
+          cd /k
           git fetch --depth 1 origin ${{ inputs.kernel_ref }} || true
           git checkout ${{ inputs.kernel_ref }} || echo "остаёмся на HEAD ветки"
           git log -1 --oneline
 
       - name: Наложить патч
         run: |
-          cd kernel
-          git apply -v ../patches/0001-qcacld-monitor-mode-raw-tx.patch
+          cd /k
+          git apply -v "$GITHUB_WORKSPACE/patches/0001-qcacld-monitor-mode-raw-tx.patch"
           git diff --stat
 
       - name: Конфигурация
         run: |
-          cd kernel
+          cd /k
           make -j$(nproc) marble_defconfig
           # marble_defconfig не задаёт LTO -> Kconfig берёт LTO_NONE и следом
           # выбрасывает CFI. Работающее ядро собрано с LTO_CLANG_FULL и CFI_CLANG:
@@ -109,17 +114,17 @@ jobs:
           [ "$fail" = 0 ] || { echo "конфиг не сошёлся, дальше нет смысла"; exit 1; }
 
       - name: modules_prepare
-        run: cd kernel && make -j$(nproc) modules_prepare
+        run: cd /k && make -j$(nproc) modules_prepare
 
       - name: Сборка qcacld внешним модулем
         run: |
-          cd kernel
+          cd /k
           # Внутридеревенский `make modules` при MODVERSIONS тянет за собой vmlinux,
           # а на нём ломаются посторонние downstream-драйверы (techpack/camera,
           # pci-msm). Внешняя сборка (M=) vmlinux не требует: CRC modpost берёт
           # из Module.symvers, который мы собрали из 312 модулей самого устройства
           # (3565 символов, покрывают все 506 импортов стокового qca6490).
-          cp ../Module.symvers.device Module.symvers
+          cp "$GITHUB_WORKSPACE/Module.symvers.device" Module.symvers
           K=$PWD
           Q=$K/drivers/staging/qcacld-3.0
           make -j$(nproc) -C $K M=$Q modules \
@@ -134,7 +139,7 @@ jobs:
 
       - name: Собрать результат
         run: |
-          cd kernel
+          cd /k
           mkdir -p out
           KO=$(find drivers/staging/qcacld-3.0 -name '*.ko' | head -1)
           [ -n "$KO" ] || { echo "модуль не собрался"; exit 1; }
@@ -167,5 +172,5 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: qca6490-module
-          path: kernel/out/*
+          path: /k/out/*
           retention-days: 30
