@@ -1,0 +1,10 @@
+{
+ "wiphy_new_nm": 2889391493,
+ "wiphy_register": 1294647294,
+ "wiphy_free": 1586987679,
+ "wiphy_unregister": 3392502534,
+ "cfg80211_scan_done": 2559627349,
+ "cfg80211_put_bss": 3265466808,
+ "cfg80211_disconnected": 1456559920,
+ "cfg80211_ch_switch_notify": 2080679250
+}
