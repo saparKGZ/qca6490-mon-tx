@@ -122,6 +122,10 @@ jobs:
           # pci-msm). Внешняя сборка (M=) vmlinux не требует: CRC modpost берёт
           # из Module.symvers, который мы собрали из 312 модулей самого устройства
           # (3565 символов, покрывают все 506 импортов стокового qca6490).
+          # KCFLAGS=-Wno-error: дерево melt писалось под clang 12-14, а мы собираем
+          # clang 22. Новый компилятор находит в старом коде вендора то, чего тогда
+          # не находил (напр. implicit-enum-enum-cast в cmn/hif/src/ce/ce_main.c),
+          # и -Werror из Kbuild драйвера превращает это в ошибку сборки.
           cp "$GITHUB_WORKSPACE/Module.symvers.device" Module.symvers
           K=$PWD
           Q=$K/drivers/staging/qcacld-3.0
@@ -134,7 +138,8 @@ jobs:
             WLAN_PROFILE=qca6490 \
             CONFIG_QCA_CLD_WLAN=m \
             PANIC_ON_BUG=n \
-            WLAN_WARN_ON_ASSERT=n
+            WLAN_WARN_ON_ASSERT=n \
+            KCFLAGS="-Wno-error -Wno-implicit-enum-enum-cast"
           find $Q -name '*.ko'
 
       - name: Собрать результат
