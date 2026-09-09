@@ -1,5 +1,3 @@
-diff --git a/drivers/staging/qcacld-3.0/core/hdd/src/wlan_hdd_main.c b/drivers/staging/qcacld-3.0/core/hdd/src/wlan_hdd_main.c
-index 574715d5e..453cb9ca2 100644
 --- a/drivers/staging/qcacld-3.0/core/hdd/src/wlan_hdd_main.c
 +++ b/drivers/staging/qcacld-3.0/core/hdd/src/wlan_hdd_main.c
 @@ -199,6 +199,7 @@
@@ -10,11 +8,10 @@ index 574715d5e..453cb9ca2 100644
  #include "qdf_lock.h"
  #include "wlan_hdd_thermal.h"
  #include "osif_cm_util.h"
-@@ -3108,6 +3109,23 @@ static int __hdd_mon_open(struct net_device *dev)
- 	if (!ret)
+@@ -3109,6 +3110,32 @@
  		ret = hdd_enable_monitor_mode(dev);
  
-+	if (!ret) {
+ 	if (!ret) {
 +		cdp_config_param_type vdev_param = {0};
 +		ol_txrx_soc_handle soc = cds_get_context(QDF_MODULE_ID_SOC);
 +
@@ -29,12 +26,22 @@ index 574715d5e..453cb9ca2 100644
 +						   CDP_TX_ENCAP_TYPE,
 +						   vdev_param))
 +			hdd_err("mon: failed to switch vdev to raw tx encap");
++
++		/*
++		 * Без несущей сетевой стек отбрасывает кадры ещё до
++		 * ndo_start_xmit, и TX-обработчик не вызывается вовсе
++		 * (проверено kprobe: 0 вызовов за 20 с инжекта).
++		 * Стоковому драйверу это безразлично — он и не передаёт.
++		 */
++		netif_carrier_on(dev);
++		netif_tx_start_all_queues(dev);
 +	}
 +
- 	if (!ret) {
++	if (!ret) {
  		param.policy = BBM_DRIVER_MODE_POLICY;
  		param.policy_info.driver_mode = QDF_GLOBAL_MONITOR_MODE;
-@@ -6109,11 +6127,108 @@ static const struct net_device_ops wlan_drv_ops = {
+ 		hdd_bbm_apply_independent_policy(hdd_ctx, &param);
+@@ -6108,11 +6135,108 @@
  };
  
  #ifdef FEATURE_MONITOR_MODE_SUPPORT
