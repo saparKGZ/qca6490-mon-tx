@@ -73,10 +73,31 @@ jobs:
             -e CFI_CLANG -e CFI_CLANG_SHADOW -d CFI_PERMISSIVE \
             -d HZ_250 -e HZ_300 --set-val HZ 300
           make -j$(nproc) olddefconfig
+
+          # Собирать все 328 модулей незачем и вредно: часть downstream-драйверов
+          # Qualcomm (slimbus, i2c-geni, cpuidle, clk-debug, dcvs, hyp_core_ctl)
+          # не компилируется из-за TRACE_INCLUDE_PATH, а make после любой ошибки
+          # не запускает стадию modpost — и не линкуется НИ ОДИН модуль, включая наш.
+          # Оставляем только qcacld и его зависимости из depends= стокового модуля:
+          #   cnss2, mi_cnss_statistic, cfg80211, cnss_prealloc, cnss_nl, cnss_utils
+          KEEP="CONFIG_QCA_CLD_WLAN CONFIG_CNSS2 CONFIG_CNSS_UTILS CONFIG_CNSS_GENL \
+                CONFIG_WCNSS_MEM_PRE_ALLOC CONFIG_MI_CNSS_STATISTIC CONFIG_CFG80211"
+          awk -v keep="$KEEP" '
+            BEGIN { n = split(keep, a, /[ \t]+/); for (i = 1; i <= n; i++) k[a[i]] = 1 }
+            /^CONFIG_[A-Z0-9_]+=m$/ {
+              sym = $0; sub(/=m$/, "", sym)
+              if (!(sym in k)) { print "# " sym " is not set"; next }
+            }
+            { print }
+          ' .config > .config.trimmed && mv .config.trimmed .config
+          make -j$(nproc) olddefconfig
+          echo "модулей осталось: $(grep -c '=m$' .config)"
+
           echo "--- проверка критичных опций ---"
           fail=0
           for K in CONFIG_LTO_CLANG_FULL CONFIG_CFI_CLANG CONFIG_CFI_CLANG_SHADOW \
-                   CONFIG_MODVERSIONS CONFIG_QCA_CLD_WLAN CONFIG_KASAN_HW_TAGS; do
+                   CONFIG_MODVERSIONS CONFIG_QCA_CLD_WLAN CONFIG_KASAN_HW_TAGS \
+                   CONFIG_CNSS2 CONFIG_CNSS_UTILS CONFIG_CFG80211; do
             if grep -qE "^$K=" .config; then
               echo "  ok   $(grep -E "^$K=" .config)"
             else
@@ -98,9 +119,11 @@ jobs:
       - name: Линковка модулей
         run: |
           cd kernel
-          # -k: не тормозить из-за посторонних модулей, нам нужен только qca6490
-          make -j$(nproc) -k modules || echo "часть модулей не собралась, проверяем свой"
-          find . -name 'qca6490.ko' -o -name 'wlan.ko'
+          # KBUILD_MODPOST_WARN=1: vmlinux мы не собираем, поэтому Module.symvers
+          # без символов ядра и modpost ругается на неразрешённые. CRC всё равно
+          # пересаживаются из стокового модуля, так что это предупреждение, не ошибка.
+          make -j$(nproc) KBUILD_MODPOST_WARN=1 modules
+          find . -name '*.ko' | head -20
 
       - name: Собрать результат
         run: |
