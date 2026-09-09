@@ -51,7 +51,13 @@
 + * which is not on the HDD include path; mirror the two values locally.
 + */
 +#define HDD_MON_TX_PEER_ID_INVALID 0xffff
-+#define HDD_MON_TX_TID_INVALID     31
++/*
++ * TID передаём ВАЛИДНЫЙ (0), а не HTT_TX_EXT_TID_INVALID(31): датапат использует
++ * его как индекс в pdev->stats.tid_stats.tid_tx_stats[ring][tid], где размерность
++ * CDP_MAX_DATA_TIDS = 9. С 31 это выход за границы массива, UBSAN ловит его
++ * ловушкой brk #0x5512 и ядро уходит в панику прямо в dp_tx_send_msdu_single.
++ */
++#define HDD_MON_TX_TID_BEST_EFFORT 0
 +
 +/*
 + * <net/ieee80211_radiotap.h> cannot be pulled in here: qcacld's
@@ -120,7 +126,7 @@
 +	tx_len = skb->len;
 +
 +	tx_exc_meta.peer_id = HDD_MON_TX_PEER_ID_INVALID;
-+	tx_exc_meta.tid = HDD_MON_TX_TID_INVALID;
++	tx_exc_meta.tid = HDD_MON_TX_TID_BEST_EFFORT;
 +	tx_exc_meta.tx_encap_type = htt_cmn_pkt_type_raw;
 +	tx_exc_meta.sec_type = cdp_sec_type_none;
 +
