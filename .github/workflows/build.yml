@@ -111,33 +111,57 @@ jobs:
       - name: modules_prepare
         run: cd kernel && make -j$(nproc) modules_prepare
 
-      - name: Компиляция qcacld
+      - name: Сборка qcacld внешним модулем
         run: |
           cd kernel
-          make -j$(nproc) KBUILD_MODULES=1 drivers/staging/qcacld-3.0/
-          echo "объектов: $(find drivers/staging/qcacld-3.0 -name '*.o' | wc -l)"
-
-      - name: Линковка модулей
-        run: |
-          cd kernel
-          # KBUILD_MODPOST_WARN=1: vmlinux мы не собираем, поэтому Module.symvers
-          # без символов ядра и modpost ругается на неразрешённые. CRC всё равно
-          # пересаживаются из стокового модуля, так что это предупреждение, не ошибка.
-          make -j$(nproc) KBUILD_MODPOST_WARN=1 modules
-          find . -name '*.ko' | head -20
+          # Внутридеревенский `make modules` при MODVERSIONS тянет за собой vmlinux,
+          # а на нём ломаются посторонние downstream-драйверы (techpack/camera,
+          # pci-msm). Внешняя сборка (M=) vmlinux не требует: CRC modpost берёт
+          # из Module.symvers, который мы собрали из 312 модулей самого устройства
+          # (3565 символов, покрывают все 506 импортов стокового qca6490).
+          cp ../Module.symvers.device Module.symvers
+          K=$PWD
+          Q=$K/drivers/staging/qcacld-3.0
+          make -j$(nproc) -C $K M=$Q modules \
+            MODNAME=qca6490 \
+            WLAN_ROOT=$Q \
+            WLAN_COMMON_ROOT=cmn \
+            WLAN_COMMON_INC=$Q/cmn \
+            WLAN_FW_API=$Q/../fw-api/ \
+            WLAN_PROFILE=qca6490 \
+            CONFIG_QCA_CLD_WLAN=m
+          find $Q -name '*.ko'
 
       - name: Собрать результат
         run: |
           cd kernel
           mkdir -p out
-          KO=$(find . -name 'qca6490.ko' -o -name 'wlan.ko' | head -1)
+          KO=$(find drivers/staging/qcacld-3.0 -name '*.ko' | head -1)
           [ -n "$KO" ] || { echo "модуль не собрался"; exit 1; }
           cp "$KO" out/
           cp .config out/build.config
-          cp Module.symvers out/ 2>/dev/null || true
           ls -la out
-          echo "--- vermagic ---"
-          strings out/*.ko | grep -E '^vermagic=|^name=' | head -3
+          echo "--- vermagic / name / depends ---"
+          strings out/*.ko | grep -E '^vermagic=|^name=|^depends=' | head -3
+          echo "--- символов в __versions ---"
+          python3 - <<'PYEOF'
+          import struct, glob
+          f = glob.glob('out/*.ko')[0]
+          d = open(f, 'rb').read()
+          e_shoff, = struct.unpack_from('<Q', d, 0x28)
+          shent, shnum, shstr = struct.unpack_from('<HHH', d, 0x3a)
+          def sh(i):
+              o = e_shoff + i*shent
+              nm, = struct.unpack_from('<I', d, o)
+              off, size = struct.unpack_from('<QQ', d, o+0x18)
+              return nm, off, size
+          _, stro, _ = sh(shstr)
+          for i in range(shnum):
+              nm, off, size = sh(i)
+              end = d.index(b'\0', stro+nm)
+              if d[stro+nm:end] == b'__versions':
+                  print('записей:', size//64)
+          PYEOF
 
       - name: Артефакт
         uses: actions/upload-artifact@v4
