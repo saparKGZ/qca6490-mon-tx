@@ -3,9 +3,9 @@ name: build qca6490.ko
 on:
   workflow_dispatch:
     inputs:
-      kernel_ref:
-        description: "Ветка или коммит ядра"
-        default: "b9e789347b1bc1042a43090ca73462bb004a94f8"
+      branch:
+        description: "Ветка ядра (melt = qcacld 2.0.9.20A, ABI совместим с устройством)"
+        default: "melt"
       llvm_ver:
         description: "Мажорная версия LLVM"
         default: "22"
@@ -53,11 +53,9 @@ jobs:
           # в /bin/sh -c одним аргументом. Лимит на один аргумент — 128 КБ,
           # и с путём /home/runner/work/<repo>/<repo>/kernel мы его превышали.
           sudo mkdir -p /k && sudo chown "$USER" /k
-          git clone --depth 1 --branch melt-rebase \
+          git clone --depth 1 --branch ${{ inputs.branch }} \
             https://github.com/Pzqqt/android_kernel_xiaomi_marble.git /k
           cd /k
-          git fetch --depth 1 origin ${{ inputs.kernel_ref }} || true
-          git checkout ${{ inputs.kernel_ref }} || echo "остаёмся на HEAD ветки"
           git log -1 --oneline
 
       - name: Наложить патч
@@ -134,7 +132,9 @@ jobs:
             WLAN_COMMON_INC=$Q/cmn \
             WLAN_FW_API=$Q/../fw-api/ \
             WLAN_PROFILE=qca6490 \
-            CONFIG_QCA_CLD_WLAN=m
+            CONFIG_QCA_CLD_WLAN=m \
+            PANIC_ON_BUG=n \
+            WLAN_WARN_ON_ASSERT=n
           find $Q -name '*.ko'
 
       - name: Собрать результат
