@@ -57,7 +57,7 @@ jobs:
           cd /k
           python3 - <<'PY'
           import json, subprocess, glob, sys
-          ref = json.load(open('$GITHUB_WORKSPACE/ci/abi-reference.json'.replace('$GITHUB_WORKSPACE', __import__('os').environ['GITHUB_WORKSPACE'])))
+          ref = json.load(open('$GITHUB_WORKSPACE/abi-reference.json'.replace('$GITHUB_WORKSPACE', __import__('os').environ['GITHUB_WORKSPACE'])))
           crcs = {}
           for o in glob.glob('net/wireless/*.o'):
               try:
