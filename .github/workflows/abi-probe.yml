@@ -55,30 +55,4 @@ jobs:
       - name: Сверка CRC с устройством
         run: |
           cd /k
-          python3 - <<'PY'
-          import json, subprocess, glob, sys
-          ref = json.load(open('$GITHUB_WORKSPACE/abi-reference.json'.replace('$GITHUB_WORKSPACE', __import__('os').environ['GITHUB_WORKSPACE'])))
-          crcs = {}
-          for o in glob.glob('net/wireless/*.o'):
-              try:
-                  out = subprocess.run(['llvm-nm', o], capture_output=True, text=True).stdout
-              except Exception:
-                  continue
-              for line in out.splitlines():
-                  p = line.split()
-                  if len(p) >= 3 and p[-1].startswith('__crc_'):
-                      crcs[p[-1][6:]] = int(p[0], 16) & 0xffffffff
-          ok = bad = miss = 0
-          print('%-34s %-12s %-12s' % ('СИМВОЛ', 'УСТРОЙСТВО', 'ЭТО ДЕРЕВО'))
-          for k, v in sorted(ref.items()):
-              got = crcs.get(k)
-              if got is None:
-                  print('%-34s 0x%08x   не найден' % (k, v)); miss += 1
-              elif got == v:
-                  print('%-34s 0x%08x   0x%08x  СОВПАЛ' % (k, v, got)); ok += 1
-              else:
-                  print('%-34s 0x%08x   0x%08x  РАСХОЖДЕНИЕ' % (k, v, got)); bad += 1
-          print()
-          print('совпало=%d расхождений=%d не найдено=%d' % (ok, bad, miss))
-          print('ВЕРДИКТ:', 'ABI СОВМЕСТИМ' if bad == 0 and ok > 0 else 'ABI НЕ СОВПАДАЕТ')
-          PY
+          NM=llvm-nm python3 "$GITHUB_WORKSPACE/extract-crcs.py" net/wireless "$GITHUB_WORKSPACE/abi-reference.json"
