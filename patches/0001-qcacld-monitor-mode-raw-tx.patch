@@ -1,0 +1,146 @@
+diff --git a/drivers/staging/qcacld-3.0/core/hdd/src/wlan_hdd_main.c b/drivers/staging/qcacld-3.0/core/hdd/src/wlan_hdd_main.c
+index 574715d5e..453cb9ca2 100644
+--- a/drivers/staging/qcacld-3.0/core/hdd/src/wlan_hdd_main.c
++++ b/drivers/staging/qcacld-3.0/core/hdd/src/wlan_hdd_main.c
+@@ -199,6 +199,7 @@
+ #include "wlan_cm_roam_api.h"
+ #include "wlan_cm_roam_ucfg_api.h"
+ #include <cdp_txrx_ctrl.h>
++#include <cdp_txrx_cmn.h>
+ #include "qdf_lock.h"
+ #include "wlan_hdd_thermal.h"
+ #include "osif_cm_util.h"
+@@ -3108,6 +3109,23 @@ static int __hdd_mon_open(struct net_device *dev)
+ 	if (!ret)
+ 		ret = hdd_enable_monitor_mode(dev);
+ 
++	if (!ret) {
++		cdp_config_param_type vdev_param = {0};
++		ol_txrx_soc_handle soc = cds_get_context(QDF_MODULE_ID_SOC);
++
++		/*
++		 * dp_tx_send_exception() picks the raw-frame path from the
++		 * *vdev's* tx_encap_type rather than from the per-packet
++		 * metadata, so the monitor vdev has to be switched to raw
++		 * encapsulation for injected frames to survive.
++		 */
++		vdev_param.cdp_vdev_param_tx_encap = htt_cmn_pkt_type_raw;
++		if (soc && cdp_txrx_set_vdev_param(soc, adapter->vdev_id,
++						   CDP_TX_ENCAP_TYPE,
++						   vdev_param))
++			hdd_err("mon: failed to switch vdev to raw tx encap");
++	}
++
+ 	if (!ret) {
+ 		param.policy = BBM_DRIVER_MODE_POLICY;
+ 		param.policy_info.driver_mode = QDF_GLOBAL_MONITOR_MODE;
+@@ -6109,11 +6127,108 @@ static const struct net_device_ops wlan_drv_ops = {
+ };
+ 
+ #ifdef FEATURE_MONITOR_MODE_SUPPORT
+-/* Monitor mode net_device_ops, doesnot Tx and most of operations. */
++/*
++ * HTT_INVALID_PEER / HTT_TX_EXT_TID_INVALID live in fw-api/fw/htt_common.h,
++ * which is not on the HDD include path; mirror the two values locally.
++ */
++#define HDD_MON_TX_PEER_ID_INVALID 0xffff
++#define HDD_MON_TX_TID_INVALID     31
++
++/*
++ * <net/ieee80211_radiotap.h> cannot be pulled in here: qcacld's
++ * cds_ieee80211_common_i.h defines IEEE80211_CHAN_* as macros, which collide
++ * with the enumerators of the same name in that header. Only the fixed-size
++ * front of the radiotap header is needed, so mirror it locally.
++ */
++struct hdd_mon_radiotap_hdr {
++	uint8_t it_version;
++	uint8_t it_pad;
++	__le16 it_len;
++	__le32 it_present;
++} __packed;
++
++/**
++ * hdd_mon_hard_start_xmit() - TX handler for the monitor netdev
++ * @skb: radiotap header followed by a bare 802.11 frame
++ * @dev: monitor net_device (ARPHRD_IEEE80211_RADIOTAP)
++ *
++ * Stock qcacld leaves wlan_mon_drv_ops without an ndo_start_xmit, so the
++ * kernel drops every frame userspace writes to the monitor interface before
++ * the driver ever sees it. Strip the radiotap header and push the bare 802.11
++ * frame into the datapath exception path, which knows how to transmit
++ * htt_cmn_pkt_type_raw MSDUs.
++ *
++ * Return: NETDEV_TX_OK always; failures free the skb and bump tx_dropped.
++ */
++static netdev_tx_t hdd_mon_hard_start_xmit(struct sk_buff *skb,
++					   struct net_device *dev)
++{
++	struct hdd_adapter *adapter = WLAN_HDD_GET_PRIV_PTR(dev);
++	struct cdp_tx_exception_metadata tx_exc_meta = {0};
++	struct hdd_mon_radiotap_hdr *rtap;
++	ol_txrx_soc_handle soc;
++	uint32_t tx_len;
++	uint16_t rtap_len;
++
++	soc = cds_get_context(QDF_MODULE_ID_SOC);
++	if (!soc || !adapter)
++		goto drop;
++
++	if (skb->len < sizeof(*rtap))
++		goto drop;
++
++	rtap = (struct hdd_mon_radiotap_hdr *)skb->data;
++	if (rtap->it_version)
++		goto drop;
++
++	rtap_len = le16_to_cpu(rtap->it_len);
++	if (rtap_len < sizeof(*rtap) || rtap_len >= skb->len)
++		goto drop;
++
++	/* the datapath rewrites headers in place, so we need a private copy */
++	if (skb_shared(skb) || skb_cloned(skb)) {
++		struct sk_buff *nskb = skb_unshare(skb, GFP_ATOMIC);
++
++		if (!nskb) {
++			/* skb_unshare() consumed the original on failure */
++			dev->stats.tx_dropped++;
++			return NETDEV_TX_OK;
++		}
++		skb = nskb;
++	}
++
++	skb_pull(skb, rtap_len);
++	tx_len = skb->len;
++
++	tx_exc_meta.peer_id = HDD_MON_TX_PEER_ID_INVALID;
++	tx_exc_meta.tid = HDD_MON_TX_TID_INVALID;
++	tx_exc_meta.tx_encap_type = htt_cmn_pkt_type_raw;
++	tx_exc_meta.sec_type = cdp_sec_type_none;
++
++	/* a non-NULL return means the datapath did not take the buffer */
++	if (cdp_tx_send_exc(soc, adapter->vdev_id, (qdf_nbuf_t)skb,
++			    &tx_exc_meta))
++		goto drop;
++
++	dev->stats.tx_packets++;
++	dev->stats.tx_bytes += tx_len;
++	netif_trans_update(dev);
++
++	return NETDEV_TX_OK;
++
++drop:
++	dev->stats.tx_dropped++;
++	kfree_skb(skb);
++
++	return NETDEV_TX_OK;
++}
++
++/* Monitor mode net_device_ops; Tx goes through the raw exception path. */
+ static const struct net_device_ops wlan_mon_drv_ops = {
+ 	.ndo_open = hdd_mon_open,
+ 	.ndo_stop = hdd_stop,
+ 	.ndo_get_stats = hdd_get_stats,
++	.ndo_start_xmit = hdd_mon_hard_start_xmit,
+ };
+ 
+ /**

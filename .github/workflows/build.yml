@@ -1,0 +1,123 @@
+name: build qca6490.ko
+
+on:
+  workflow_dispatch:
+    inputs:
+      kernel_ref:
+        description: "Ветка или коммит ядра"
+        default: "b9e789347b1bc1042a43090ca73462bb004a94f8"
+      llvm_ver:
+        description: "Мажорная версия LLVM"
+        default: "22"
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 300
+
+    env:
+      ARCH: arm64
+      CROSS_COMPILE: aarch64-linux-gnu-
+      LLVM: 1
+      LLVM_IAS: 1
+
+    steps:
+      - name: Забрать патч из этого репозитория
+        uses: actions/checkout@v4
+
+      - name: Пакеты сборки
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential bc bison flex libssl-dev libelf-dev \
+            python3 rsync kmod cpio zstd wget gnupg lsb-release \
+            software-properties-common gcc-aarch64-linux-gnu
+
+      - name: LLVM/clang ${{ inputs.llvm_ver }}
+        run: |
+          wget -q https://apt.llvm.org/llvm.sh
+          chmod +x llvm.sh
+          sudo ./llvm.sh ${{ inputs.llvm_ver }}
+          # 5.10 не понимает LLVM=-NN, поэтому кладём безверсионные имена в PATH
+          for t in clang clang++ ld.lld llvm-ar llvm-nm llvm-objcopy \
+                   llvm-objdump llvm-readelf llvm-strip llvm-ranlib; do
+            sudo ln -sf /usr/bin/$t-${{ inputs.llvm_ver }} /usr/local/bin/$t
+          done
+          clang --version
+          ld.lld --version
+
+      - name: Клонировать ядро
+        run: |
+          git clone --depth 1 --branch melt-rebase \
+            https://github.com/Pzqqt/android_kernel_xiaomi_marble.git kernel
+          cd kernel
+          git fetch --depth 1 origin ${{ inputs.kernel_ref }} || true
+          git checkout ${{ inputs.kernel_ref }} || echo "остаёмся на HEAD ветки"
+          git log -1 --oneline
+
+      - name: Наложить патч
+        run: |
+          cd kernel
+          git apply -v ../patches/0001-qcacld-monitor-mode-raw-tx.patch
+          git diff --stat
+
+      - name: Конфигурация
+        run: |
+          cd kernel
+          make -j$(nproc) marble_defconfig
+          # marble_defconfig не задаёт LTO -> Kconfig берёт LTO_NONE и следом
+          # выбрасывает CFI. Работающее ядро собрано с LTO_CLANG_FULL и CFI_CLANG:
+          # модуль без CFI в CFI-ядре падает на первом косвенном вызове.
+          ./scripts/config --file .config \
+            -d LTO_NONE -e LTO_CLANG_FULL -d LTO_CLANG_THIN \
+            -e CFI_CLANG -e CFI_CLANG_SHADOW -d CFI_PERMISSIVE \
+            -d HZ_250 -e HZ_300 --set-val HZ 300
+          make -j$(nproc) olddefconfig
+          echo "--- проверка критичных опций ---"
+          fail=0
+          for K in CONFIG_LTO_CLANG_FULL CONFIG_CFI_CLANG CONFIG_CFI_CLANG_SHADOW \
+                   CONFIG_MODVERSIONS CONFIG_QCA_CLD_WLAN CONFIG_KASAN_HW_TAGS; do
+            if grep -qE "^$K=" .config; then
+              echo "  ok   $(grep -E "^$K=" .config)"
+            else
+              echo "  ОТСУТСТВУЕТ $K"; fail=1
+            fi
+          done
+          grep -E "^CONFIG_HZ=" .config
+          [ "$fail" = 0 ] || { echo "конфиг не сошёлся, дальше нет смысла"; exit 1; }
+
+      - name: modules_prepare
+        run: cd kernel && make -j$(nproc) modules_prepare
+
+      - name: Компиляция qcacld
+        run: |
+          cd kernel
+          make -j$(nproc) KBUILD_MODULES=1 drivers/staging/qcacld-3.0/
+          echo "объектов: $(find drivers/staging/qcacld-3.0 -name '*.o' | wc -l)"
+
+      - name: Линковка модулей
+        run: |
+          cd kernel
+          # -k: не тормозить из-за посторонних модулей, нам нужен только qca6490
+          make -j$(nproc) -k modules || echo "часть модулей не собралась, проверяем свой"
+          find . -name 'qca6490.ko' -o -name 'wlan.ko'
+
+      - name: Собрать результат
+        run: |
+          cd kernel
+          mkdir -p out
+          KO=$(find . -name 'qca6490.ko' -o -name 'wlan.ko' | head -1)
+          [ -n "$KO" ] || { echo "модуль не собрался"; exit 1; }
+          cp "$KO" out/
+          cp .config out/build.config
+          cp Module.symvers out/ 2>/dev/null || true
+          ls -la out
+          echo "--- vermagic ---"
+          strings out/*.ko | grep -E '^vermagic=|^name=' | head -3
+
+      - name: Артефакт
+        uses: actions/upload-artifact@v4
+        with:
+          name: qca6490-module
+          path: kernel/out/*
+          retention-days: 30
