@@ -1,0 +1,49 @@
+--- a/drivers/staging/qcacld-3.0/core/hdd/src/wlan_hdd_main.c
++++ b/drivers/staging/qcacld-3.0/core/hdd/src/wlan_hdd_main.c
+@@ -6180,6 +6180,9 @@
+ 					   struct net_device *dev)
+ {
+ 	struct hdd_adapter *adapter = WLAN_HDD_GET_PRIV_PTR(dev);
++	struct hdd_context *hdd_ctx;
++	struct hdd_adapter *sta_adapter;
++	uint8_t tx_vdev_id;
+ 	struct cdp_tx_exception_metadata tx_exc_meta = {0};
+ 	struct hdd_mon_radiotap_hdr *rtap;
+ 	ol_txrx_soc_handle soc;
+@@ -6216,13 +6219,35 @@
+ 	skb_pull(skb, rtap_len);
+ 	tx_len = skb->len;
+ 
++	/*
++	 * ЭТАП 2. Прошивка QCA6490 не выпускает в эфир кадры, отправленные с
++	 * vdev типа MONITOR: они доходят до датапата (kprobe: 640 вызовов
++	 * этой функции), ошибок нет, но точка доступа на -29 дБм не отвечает
++	 * ни на probe request, ни на authentication request.
++	 *
++	 * При monitor_mode_concurrency=1 рядом с монитором живёт настоящая
++	 * станция, чей vdev прошивка признаёт. Отдаём кадр с её vdev_id —
++	 * это тот же приём, что в известном обходе с созданием скрытого
++	 * STA-vdev, только vdev нам предоставляет сам драйвер.
++	 *
++	 * Если станции нет (одиночный monitor, con_mode=4) — работаем как
++	 * раньше, со своим vdev_id.
++	 */
++	tx_vdev_id = adapter->vdev_id;
++	hdd_ctx = WLAN_HDD_GET_CTX(adapter);
++	if (hdd_ctx) {
++		sta_adapter = hdd_get_adapter(hdd_ctx, QDF_STA_MODE);
++		if (sta_adapter)
++			tx_vdev_id = sta_adapter->vdev_id;
++	}
++
+ 	tx_exc_meta.peer_id = HDD_MON_TX_PEER_ID_INVALID;
+ 	tx_exc_meta.tid = HDD_MON_TX_TID_BEST_EFFORT;
+ 	tx_exc_meta.tx_encap_type = htt_cmn_pkt_type_raw;
+ 	tx_exc_meta.sec_type = cdp_sec_type_none;
+ 
+ 	/* a non-NULL return means the datapath did not take the buffer */
+-	if (cdp_tx_send_exc(soc, adapter->vdev_id, (qdf_nbuf_t)skb,
++	if (cdp_tx_send_exc(soc, tx_vdev_id, (qdf_nbuf_t)skb,
+ 			    &tx_exc_meta))
+ 		goto drop;
+ 
