@@ -6,6 +6,10 @@ on:
       branch:
         description: "Ветка ядра (melt = qcacld 2.0.9.20A, ABI совместим с устройством)"
         default: "melt"
+      stage2:
+        description: "Применять патч этапа 2 (monitor-vdev как STA)"
+        type: boolean
+        default: true
       llvm_ver:
         description: "Мажорная версия LLVM"
         default: "22"
@@ -62,6 +66,12 @@ jobs:
         run: |
           cd /k
           git apply -v "$GITHUB_WORKSPACE/patches/0001-qcacld-monitor-mode-raw-tx.patch"
+          if [ "${{ inputs.stage2 }}" = "true" ]; then
+            echo "--- этап 2: объявляем monitor-vdev как STA ---"
+            git apply -v "$GITHUB_WORKSPACE/patches/0002-monitor-vdev-as-sta.patch"
+          else
+            echo "--- этап 2 отключён ---"
+          fi
           git diff --stat
 
       - name: Конфигурация

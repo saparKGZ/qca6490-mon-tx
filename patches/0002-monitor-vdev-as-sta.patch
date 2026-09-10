@@ -1,0 +1,28 @@
+--- a/drivers/staging/qcacld-3.0/components/mlme/core/src/wlan_mlme_vdev_mgr_interface.c
++++ b/drivers/staging/qcacld-3.0/components/mlme/core/src/wlan_mlme_vdev_mgr_interface.c
+@@ -1249,7 +1249,24 @@
+ 		*type = WLAN_VDEV_MLME_TYPE_IBSS;
+ 		break;
+ 	case QDF_MONITOR_MODE:
+-		*type = WMI_HOST_VDEV_TYPE_MONITOR;
++		/*
++		 * ЭКСПЕРИМЕНТ (этап 2): объявляем monitor-vdev как STA.
++		 *
++		 * Прошивка QCA6490 отбрасывает передачу с vdev типа MONITOR(4):
++		 * кадры доходят до датапата (kprobe: 640 вызовов
++		 * hdd_mon_hard_start_xmit), драйвер ошибок не пишет, но в эфир
++		 * ничего не выходит — точка доступа на -29 дБм не отвечает ни на
++		 * probe request, ни на authentication request.
++		 *
++		 * Известный обход (h7w) создаёт отдельный скрытый STA-vdev и
++		 * подменяет vdev_id у передаваемых кадров. Здесь пробуем дешёвый
++		 * вариант того же: сразу объявить прошивке тип STA(2).
++		 *
++		 * Возможные последствия: прошивка может ждать привязанного peer
++		 * для STA-vdev, а настройка приёма в monitor-режиме может
++		 * сломаться. Проверяется одним тестом.
++		 */
++		*type = WLAN_VDEV_MLME_TYPE_STA;
+ 		break;
+ 	case QDF_NDI_MODE:
+ 		*type = WLAN_VDEV_MLME_TYPE_NDI;
