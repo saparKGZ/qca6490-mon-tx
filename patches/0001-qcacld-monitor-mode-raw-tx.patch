@@ -41,7 +41,7 @@
  		param.policy = BBM_DRIVER_MODE_POLICY;
  		param.policy_info.driver_mode = QDF_GLOBAL_MONITOR_MODE;
  		hdd_bbm_apply_independent_policy(hdd_ctx, &param);
-@@ -6108,11 +6135,108 @@
+@@ -6108,11 +6135,116 @@
  };
  
  #ifdef FEATURE_MONITOR_MODE_SUPPORT
@@ -52,10 +52,12 @@
 + */
 +#define HDD_MON_TX_PEER_ID_INVALID 0xffff
 +/*
-+ * TID передаём ВАЛИДНЫЙ (0), а не HTT_TX_EXT_TID_INVALID(31): датапат использует
-+ * его как индекс в pdev->stats.tid_stats.tid_tx_stats[ring][tid], где размерность
-+ * CDP_MAX_DATA_TIDS = 9. С 31 это выход за границы массива, UBSAN ловит его
-+ * ловушкой brk #0x5512 и ядро уходит в панику прямо в dp_tx_send_msdu_single.
++ * TID должен быть ВАЛИДНЫМ. HTT_TX_EXT_TID_INVALID(31) означает "не
++ * переопределять TID", но датапат захватывает его в начале
++ * dp_tx_send_msdu_single() и использует как индекс:
++ *   tid_stats = &pdev->stats.tid_stats.tid_tx_stats[ring_id][tid];
++ * при CDP_MAX_DATA_TIDS = 9. Индекс 31 в массив из 9 -> выход за границы,
++ * UBSAN ловит ловушкой brk #0x5512 и ядро паникует.
 + */
 +#define HDD_MON_TX_TID_BEST_EFFORT 0
 +
